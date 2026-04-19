@@ -19,32 +19,48 @@ parseq_path = os.path.join(os.path.dirname(__file__), 'parseq')
 if os.path.exists(parseq_path):
     sys.path.insert(0, parseq_path)
 else:
-    logger.error(f"PARSeq not found at {parseq_path}")
-    exit()
+    logger.warning(f"PARSeq folder not found at {parseq_path}, trying direct import")
 
-from strhub.data.utils import Tokenizer
+try:
+    from strhub.data.utils import Tokenizer
+except ImportError:
+    logger.error("Failed to import Tokenizer. Make sure PARSeq is installed.")
+    # Create a basic tokenizer if PARSeq is not available
+    class Tokenizer:
+        def __init__(self, charset):
+            self.charset = charset
+            self._itos = {i: ch for i, ch in enumerate(charset)}
+            self._stoi = {ch: i for i, ch in enumerate(charset)}
+            self.pad_id = 0
+            self.bos_id = 1
+            self.eos_id = 2
+
 import torch.hub
 
 warnings.filterwarnings('ignore')
 
 # =========================
-# Configuration
+# Configuration - Added explicit charsets for all languages
 # =========================
+TELUGU_CHARSET = "అఆఇఈఉఊఋఌఎఏఐఒఓఔకఖగఘఙచఛజఝఞటఠడఢణతథదధనపఫబభమయరఱలళవశషసహాిీుూృౄెేైొోౌ్ౢౣ"
+BENGALI_CHARSET = "অআইঈউঊঋএঐওঔকখগঘঙচছজঝঞটঠডঢণতথদধনপফবভমযরলশষসহাািীুূৃৄেৈোৌ্ৎংঃ"
 ORIYA_CHARSET = "ଅଆଇଈଉଊଋଌଏଐଓଔକଖଗଘଙଚଛଜଝଞଟଠଡଢଣତଥଦଧନପଫବଭମଯରଲଳଵଶଷସହାିିୀୁୂୃୄେୈୋୌ୍ଂଁଃ"
 
 LANGUAGES = {
     "Telugu": {
         "model_path": "parseq_telugu_finetuned_final_5epochs.pth",
         "samples_dir": "telugu_samples",
+        "charset": TELUGU_CHARSET
     },
     "Bengali": {
         "model_path": "finetuned_bengali_model.pth",
         "samples_dir": "bengali_samples",
+        "charset": BENGALI_CHARSET
     },
     "Oriya": {
         "model_path": "parseq_oriya_final_direct.pth",
         "samples_dir": "oriya_samples",
-        "charset": ORIYA_CHARSET,
+        "charset": ORIYA_CHARSET
     }
 }
 
@@ -82,26 +98,40 @@ def load_model(model_path, lang_name):
         return model_cache[cache_key]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Loading {lang_name} model on {device}")
 
     if not os.path.exists(model_path):
         logger.error(f"Model not found: {model_path}")
         return None, None, None
 
     try:
-        # Load checkpoint with weights_only=False for compatibility with older models
+        # Load checkpoint with weights_only=False for compatibility
         checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+        logger.info(f"Checkpoint loaded for {lang_name}")
 
+        # Get charset - first try from checkpoint, then from config
         if 'charset' in checkpoint:
             charset_str = checkpoint['charset']
-        elif lang_name == "Oriya":
-            charset_str = ORIYA_CHARSET
+            logger.info(f"Using charset from checkpoint for {lang_name}")
         else:
-            # Try to infer charset from model
-            logger.warning(f"No charset found for {lang_name}, using default")
-            return None, None, None
+            charset_str = LANGUAGES[lang_name].get('charset')
+            if charset_str:
+                logger.info(f"Using configured charset for {lang_name}")
+            else:
+                logger.error(f"No charset found for {lang_name}")
+                return None, None, None
 
-        model = torch.hub.load('baudm/parseq', 'parseq', pretrained=False, trust_repo=True)
-        model.tokenizer = Tokenizer(charset_str)
+        # Load model architecture
+        try:
+            model = torch.hub.load('baudm/parseq', 'parseq', pretrained=False, trust_repo=True)
+            logger.info(f"Model architecture loaded for {lang_name}")
+        except Exception as e:
+            logger.error(f"Failed to load model architecture: {e}")
+            return None, None, None
+        
+        # Create tokenizer and attach to model
+        tokenizer = Tokenizer(charset_str)
+        model.tokenizer = tokenizer
 
         # Handle different checkpoint formats
         if 'model_state_dict' in checkpoint:
@@ -111,43 +141,59 @@ def load_model(model_path, lang_name):
         else:
             state_dict = checkpoint
         
-        # Remove unexpected keys if any
+        # Remove 'module.' prefix if present and handle other key issues
         new_state_dict = {}
         for k, v in state_dict.items():
-            if 'module.' in k:
-                k = k.replace('module.', '')
+            # Remove 'module.' prefix
+            if k.startswith('module.'):
+                k = k[7:]
+            # Handle other common prefixes
+            if k.startswith('_orig_mod.'):
+                k = k[10:]
             new_state_dict[k] = v
         
-        model.load_state_dict(new_state_dict, strict=False)
+        # Load state dict with strict=False to handle missing/unexpected keys
+        missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=False)
+        if missing_keys:
+            logger.warning(f"Missing keys for {lang_name}: {missing_keys[:5]}...")
+        if unexpected_keys:
+            logger.warning(f"Unexpected keys for {lang_name}: {unexpected_keys[:5]}...")
+        
         model = model.to(device)
         model.eval()
 
-        model_cache[cache_key] = (model, device, model.tokenizer)
-        logger.info(f"Loaded {lang_name} model successfully")
-        return model, device, model.tokenizer
+        model_cache[cache_key] = (model, device, tokenizer)
+        logger.info(f"✅ Loaded {lang_name} model successfully")
+        return model, device, tokenizer
 
     except Exception as e:
         logger.error(f"Error loading {lang_name}: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None, None
 
 # =========================
 # Inference
 # =========================
 def inference_image(model, image, device, tokenizer):
-    if image.mode != 'RGB':
-        image = image.convert('RGB')
+    try:
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
 
-    img_tensor = transform(image).unsqueeze(0).to(device)
+        img_tensor = transform(image).unsqueeze(0).to(device)
 
-    with torch.no_grad():
-        logits = model(img_tensor)
-        predicted_text = decode_prediction(logits, tokenizer)
+        with torch.no_grad():
+            logits = model(img_tensor)
+            predicted_text = decode_prediction(logits, tokenizer)
 
-        probs = torch.softmax(logits, dim=-1)
-        max_probs = probs.max(dim=-1)[0][0]
-        avg_conf = max_probs[:len(predicted_text)].mean().item() if len(predicted_text) > 0 else 0
+            probs = torch.softmax(logits, dim=-1)
+            max_probs = probs.max(dim=-1)[0][0]
+            avg_conf = max_probs[:len(predicted_text)].mean().item() if len(predicted_text) > 0 else 0
 
-    return predicted_text, avg_conf
+        return predicted_text, avg_conf
+    except Exception as e:
+        logger.error(f"Inference error: {e}")
+        return "", 0.0
 
 # =========================
 # Get samples for specific language
