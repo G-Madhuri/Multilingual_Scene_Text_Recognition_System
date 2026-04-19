@@ -1,5 +1,7 @@
-torch>=2.5.0
-torchvision>=0.20.0
-Pillow>=10.0.0
-numpy>=1.24.3
+torch==2.5.1
+torchvision==0.20.1
+Pillow==10.4.0
+numpy==1.26.4
+pytorch-lightning
+timm
 git+https://github.com/baudm/parseq.git
