@@ -1,45 +1,62 @@
-import gradio as gr
-import torch
-import torchvision.transforms as T
-from PIL import Image
+import zipfile
 import os
 import sys
 import warnings
 import logging
+import gradio as gr
+import torch
+import torchvision.transforms as T
+from PIL import Image
 import numpy as np
+
+# =========================
+# Auto-unzip parseq.zip if it exists
+# =========================
+if os.path.exists('parseq.zip'):
+    print("Found parseq.zip, extracting...")
+    try:
+        with zipfile.ZipFile('parseq.zip', 'r') as zip_ref:
+            zip_ref.extractall('.')
+        os.remove('parseq.zip')
+        print("✅ Extracted and removed parseq.zip")
+    except Exception as e:
+        print(f"Error extracting parseq.zip: {e}")
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # =========================
-# Import PARSeq modules
+# Setup PARSeq path
 # =========================
-parseq_path = os.path.join(os.path.dirname(__file__), 'parseq')
-if os.path.exists(parseq_path):
-    sys.path.insert(0, parseq_path)
-    
+# Add current directory to path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
+# Try to import from parseq folder
 try:
-    from strhub.models.parseq.model import PARSeq
     from strhub.data.utils import Tokenizer
-    logger.info("Successfully imported PARSeq modules")
+    logger.info("✅ Successfully imported Tokenizer from parseq folder")
 except ImportError as e:
-    logger.error(f"Failed to import PARSeq: {e}")
-    # Simple tokenizer fallback
-    class Tokenizer:
-        def __init__(self, charset):
-            self.charset = charset
-            self._itos = {i: ch for i, ch in enumerate(charset)}
-            self._stoi = {ch: i for i, ch in enumerate(charset)}
-            self.pad_id = 0
-            self.bos_id = 1
-            self.eos_id = 2
+    logger.error(f"Failed to import Tokenizer: {e}")
+    # List what's in current directory for debugging
+    logger.info(f"Files in {current_dir}: {os.listdir(current_dir)}")
+    # Check if parseq folder exists
+    if os.path.exists('parseq'):
+        logger.info("parseq folder exists, checking contents:")
+        logger.info(f"parseq contents: {os.listdir('parseq')}")
+    raise
+
+import torch.hub
 
 warnings.filterwarnings('ignore')
 
 # =========================
 # Configuration
 # =========================
+ORIYA_CHARSET = "ଅଆଇଈଉଊଋଌଏଐଓଔକଖଗଘଙଚଛଜଝଞଟଠଡଢଣତଥଦଧନପଫବଭମଯରଲଳଵଶଷସହାିିୀୁୂୃୄେୈୋୌ୍ଂଁଃ"
+
 LANGUAGES = {
     "Telugu": {
         "model_path": "parseq_telugu_finetuned_final_5epochs.pth",
@@ -52,6 +69,7 @@ LANGUAGES = {
     "Oriya": {
         "model_path": "parseq_oriya_final_direct.pth",
         "samples_dir": "oriya_samples",
+        "charset": ORIYA_CHARSET,
     }
 }
 
@@ -100,18 +118,21 @@ def load_model(model_path, lang_name):
         checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
         logger.info(f"Checkpoint loaded for {lang_name}")
 
-        # Get charset from checkpoint
-        if 'charset' not in checkpoint:
-            logger.error(f"No charset found in checkpoint for {lang_name}")
+        if 'charset' in checkpoint:
+            charset_str = checkpoint['charset']
+        elif lang_name == "Oriya":
+            charset_str = ORIYA_CHARSET
+        else:
+            logger.warning(f"No charset found for {lang_name}")
             return None, None, None
-        
-        charset_str = checkpoint['charset']
+
         logger.info(f"Charset length for {lang_name}: {len(charset_str)}")
 
-        # Create tokenizer
-        tokenizer = Tokenizer(charset_str)
-        
-        # Get model state dict
+        # Load model from torch hub
+        model = torch.hub.load('baudm/parseq', 'parseq', pretrained=False, trust_repo=True)
+        model.tokenizer = Tokenizer(charset_str)
+
+        # Handle different checkpoint formats
         if 'model_state_dict' in checkpoint:
             state_dict = checkpoint['model_state_dict']
         elif 'model' in checkpoint:
@@ -119,70 +140,20 @@ def load_model(model_path, lang_name):
         else:
             state_dict = checkpoint
         
-        # Clean up state dict keys
+        # Remove 'module.' prefix if present
         new_state_dict = {}
         for k, v in state_dict.items():
-            # Remove 'module.' prefix if present
-            if k.startswith('module.'):
-                k = k[7:]
-            # Remove '_orig_mod.' prefix if present
-            if k.startswith('_orig_mod.'):
-                k = k[10:]
+            if 'module.' in k:
+                k = k.replace('module.', '')
             new_state_dict[k] = v
         
-        # Create model - try different initialization methods
-        model = None
-        
-        # Method 1: Try to create with default parameters and then load weights
-        try:
-            # Import the base model creation function
-            from strhub.models.utils import create_model
-            
-            # Try to load with a known working config
-            model = create_model('parseq', pretrained=False)
-            logger.info("Model created with create_model")
-        except Exception as e1:
-            logger.warning(f"create_model failed: {e1}")
-            
-            # Method 2: Try direct PARSeq initialization with correct parameters
-            try:
-                # Check what parameters PARSeq expects
-                import inspect
-                sig = inspect.signature(PARSeq.__init__)
-                logger.info(f"PARSeq expects: {sig}")
-                
-                # Try without any parameters
-                model = PARSeq()
-                logger.info("Model created with PARSeq()")
-            except Exception as e2:
-                logger.warning(f"PARSeq() failed: {e2}")
-                
-                # Method 3: Try to load from checkpoint directly using torch.hub
-                try:
-                    # Use the hub to load the model
-                    model = torch.hub.load('baudm/parseq', 'parseq', pretrained=True, trust_repo=True)
-                    logger.info("Model loaded from torch hub")
-                except Exception as e3:
-                    logger.error(f"All loading methods failed. Last error: {e3}")
-                    return None, None, None
-        
-        if model is None:
-            return None, None, None
-        
-        # Load weights
-        missing, unexpected = model.load_state_dict(new_state_dict, strict=False)
-        if missing:
-            logger.warning(f"Missing keys ({len(missing)}): {missing[:3]}...")
-        if unexpected:
-            logger.warning(f"Unexpected keys ({len(unexpected)}): {unexpected[:3]}...")
-        
-        model.tokenizer = tokenizer
+        model.load_state_dict(new_state_dict, strict=False)
         model = model.to(device)
         model.eval()
 
-        model_cache[cache_key] = (model, device, tokenizer)
+        model_cache[cache_key] = (model, device, model.tokenizer)
         logger.info(f"✅ Loaded {lang_name} model successfully")
-        return model, device, tokenizer
+        return model, device, model.tokenizer
 
     except Exception as e:
         logger.error(f"Error loading {lang_name}: {e}")
@@ -194,24 +165,23 @@ def load_model(model_path, lang_name):
 # Inference
 # =========================
 def inference_image(model, image, device, tokenizer):
-    try:
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-
-        img_tensor = transform(image).unsqueeze(0).to(device)
-
-        with torch.no_grad():
-            logits = model(img_tensor)
-            predicted_text = decode_prediction(logits, tokenizer)
-
-            probs = torch.softmax(logits, dim=-1)
-            max_probs = probs.max(dim=-1)[0][0]
-            avg_conf = max_probs[:len(predicted_text)].mean().item() if len(predicted_text) > 0 else 0
-
-        return predicted_text, avg_conf
-    except Exception as e:
-        logger.error(f"Inference error: {e}")
+    if image is None:
         return "", 0.0
+    
+    if image.mode != 'RGB':
+        image = image.convert('RGB')
+
+    img_tensor = transform(image).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        logits = model(img_tensor)
+        predicted_text = decode_prediction(logits, tokenizer)
+
+        probs = torch.softmax(logits, dim=-1)
+        max_probs = probs.max(dim=-1)[0][0]
+        avg_conf = max_probs[:len(predicted_text)].mean().item() if len(predicted_text) > 0 else 0
+
+    return predicted_text, avg_conf
 
 # =========================
 # Get samples for specific language
@@ -331,6 +301,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
         margin: auto !important;
     }
     
+    /* Make tab text clearly visible */
     .tab-nav button {
         font-size: 18px !important;
         font-weight: bold !important;
@@ -353,6 +324,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
         transform: translateY(-2px);
     }
     
+    /* Button styling */
     button {
         transition: all 0.3s ease !important;
         font-weight: bold !important;
@@ -366,6 +338,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
         box-shadow: 0 5px 15px rgba(0,0,0,0.2) !important;
     }
     
+    /* Gallery styling - prevent expansion */
     .gr-gallery {
         border: 2px solid #e0e0e0;
         border-radius: 10px;
@@ -382,11 +355,13 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
         transform: scale(1.05) !important;
     }
     
+    /* Box styling */
     .gr-box {
         border-radius: 10px;
         border: 1px solid #e0e0e0;
     }
     
+    /* Primary button styling */
     .gr-button-primary {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
         color: white !important;
@@ -394,6 +369,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
     }
 """) as demo:
     
+    # Header
     gr.Markdown("""
     # 📖 Multilingual Scene Text Recognition System
     ### Extract text from images in Telugu, Bengali, and Oriya languages
@@ -407,6 +383,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
             with gr.TabItem(f"🔤 {lang}"):
                 create_language_tab(lang)
     
+    # Footer
     gr.Markdown("""
     ---
     ### 💡 How to use:
@@ -414,17 +391,24 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
     2. **Click any sample thumbnail** - it will load into the main preview above
     3. **Click "Extract Text"** button below the preview
     4. **View results** on the right side
+    
+    ### 📌 Note:
+    - Sample thumbnails stay as thumbnails - they don't expand when clicked
+    - Only the main preview area changes when you click a sample
+    - You can also upload your own images
     """)
 
 # =========================
 # Run
 # =========================
 if __name__ == "__main__":
+    # Check directories
     for lang, config in LANGUAGES.items():
         if not os.path.exists(config["model_path"]):
             logger.warning(f"⚠️ Model not found: {config['model_path']} for {lang}")
         if not os.path.exists(config["samples_dir"]):
             os.makedirs(config["samples_dir"], exist_ok=True)
+            logger.warning(f"📁 Created samples directory: {config['samples_dir']}")
     
     demo.launch(
         server_name="0.0.0.0",
