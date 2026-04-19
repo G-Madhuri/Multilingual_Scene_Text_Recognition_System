@@ -13,28 +13,28 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # =========================
-# Import PARSeq modules directly
+# Import PARSeq modules
 # =========================
+parseq_path = os.path.join(os.path.dirname(__file__), 'parseq')
+if os.path.exists(parseq_path):
+    sys.path.insert(0, parseq_path)
+    
 try:
-    # Try to import from installed parseq package
     from strhub.models.parseq.model import PARSeq
     from strhub.data.utils import Tokenizer
-    logger.info("Successfully imported PARSeq from package")
-except ImportError:
-    try:
-        # Try local path
-        parseq_path = os.path.join(os.path.dirname(__file__), 'parseq')
-        if os.path.exists(parseq_path):
-            sys.path.insert(0, parseq_path)
-            from strhub.models.parseq.model import PARSeq
-            from strhub.data.utils import Tokenizer
-            logger.info("Successfully imported PARSeq from local path")
-        else:
-            logger.error("PARSeq not found")
-            raise
-    except ImportError as e:
-        logger.error(f"Failed to import PARSeq: {e}")
-        exit()
+    from strhub.models.utils import create_model
+    logger.info("Successfully imported PARSeq modules")
+except ImportError as e:
+    logger.error(f"Failed to import PARSeq: {e}")
+    # Simple tokenizer fallback
+    class Tokenizer:
+        def __init__(self, charset):
+            self.charset = charset
+            self._itos = {i: ch for i, ch in enumerate(charset)}
+            self._stoi = {ch: i for i, ch in enumerate(charset)}
+            self.pad_id = 0
+            self.bos_id = 1
+            self.eos_id = 2
 
 warnings.filterwarnings('ignore')
 
@@ -101,7 +101,7 @@ def load_model(model_path, lang_name):
         checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
         logger.info(f"Checkpoint loaded for {lang_name}")
 
-        # Get charset from checkpoint (since you saved models with charset)
+        # Get charset from checkpoint
         if 'charset' not in checkpoint:
             logger.error(f"No charset found in checkpoint for {lang_name}")
             return None, None, None
@@ -112,13 +112,7 @@ def load_model(model_path, lang_name):
         # Create tokenizer
         tokenizer = Tokenizer(charset_str)
         
-        # Load the pretrained model from torch hub (this works!)
-        model = torch.hub.load('baudm/parseq', 'parseq', pretrained=True, trust_repo=True)
-        
-        # Modify the tokenizer
-        model.tokenizer = tokenizer
-        
-        # Now load your fine-tuned weights
+        # Get model state dict
         if 'model_state_dict' in checkpoint:
             state_dict = checkpoint['model_state_dict']
         elif 'model' in checkpoint:
@@ -137,13 +131,33 @@ def load_model(model_path, lang_name):
                 k = k[10:]
             new_state_dict[k] = v
         
+        # Get model parameters from state dict
+        img_size = new_state_dict.get('encoder.conv1.weight').shape[-1] if 'encoder.conv1.weight' in new_state_dict else 32
+        max_label_length = 100
+        
+        # Create model instance using create_model with config
+        try:
+            # Try to create model with default config
+            model = create_model('parseq', pretrained=False)
+            logger.info("Model created with create_model")
+        except:
+            # Fallback: create PARSeq instance directly
+            from strhub.models.parseq.model import PARSeq
+            model = PARSeq(
+                charset_size=len(charset_str),
+                img_size=(32, 128),
+                max_label_length=max_label_length
+            )
+            logger.info("Model created with direct PARSeq initialization")
+        
         # Load weights
         missing, unexpected = model.load_state_dict(new_state_dict, strict=False)
         if missing:
-            logger.warning(f"Missing keys: {missing[:5]}...")
+            logger.warning(f"Missing keys ({len(missing)}): {missing[:3]}...")
         if unexpected:
-            logger.warning(f"Unexpected keys: {unexpected[:5]}...")
+            logger.warning(f"Unexpected keys ({len(unexpected)}): {unexpected[:3]}...")
         
+        model.tokenizer = tokenizer
         model = model.to(device)
         model.eval()
 
@@ -298,7 +312,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
         margin: auto !important;
     }
     
-    /* Make tab text clearly visible */
     .tab-nav button {
         font-size: 18px !important;
         font-weight: bold !important;
@@ -321,7 +334,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
         transform: translateY(-2px);
     }
     
-    /* Button styling */
     button {
         transition: all 0.3s ease !important;
         font-weight: bold !important;
@@ -335,7 +347,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
         box-shadow: 0 5px 15px rgba(0,0,0,0.2) !important;
     }
     
-    /* Gallery styling - prevent expansion */
     .gr-gallery {
         border: 2px solid #e0e0e0;
         border-radius: 10px;
@@ -352,13 +363,11 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
         transform: scale(1.05) !important;
     }
     
-    /* Box styling */
     .gr-box {
         border-radius: 10px;
         border: 1px solid #e0e0e0;
     }
     
-    /* Primary button styling */
     .gr-button-primary {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
         color: white !important;
@@ -366,7 +375,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
     }
 """) as demo:
     
-    # Header
     gr.Markdown("""
     # 📖 Multilingual Scene Text Recognition System
     ### Extract text from images in Telugu, Bengali, and Oriya languages
@@ -380,7 +388,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
             with gr.TabItem(f"🔤 {lang}"):
                 create_language_tab(lang)
     
-    # Footer
     gr.Markdown("""
     ---
     ### 💡 How to use:
@@ -388,24 +395,17 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
     2. **Click any sample thumbnail** - it will load into the main preview above
     3. **Click "Extract Text"** button below the preview
     4. **View results** on the right side
-    
-    ### 📌 Note:
-    - Sample thumbnails stay as thumbnails - they don't expand when clicked
-    - Only the main preview area changes when you click a sample
-    - You can also upload your own images
     """)
 
 # =========================
 # Run
 # =========================
 if __name__ == "__main__":
-    # Check directories
     for lang, config in LANGUAGES.items():
         if not os.path.exists(config["model_path"]):
             logger.warning(f"⚠️ Model not found: {config['model_path']} for {lang}")
         if not os.path.exists(config["samples_dir"]):
             os.makedirs(config["samples_dir"], exist_ok=True)
-            logger.warning(f"📁 Created samples directory: {config['samples_dir']}")
     
     demo.launch(
         server_name="0.0.0.0",
