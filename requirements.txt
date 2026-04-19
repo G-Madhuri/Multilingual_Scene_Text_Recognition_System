@@ -4,4 +4,5 @@ Pillow
 numpy
 pytorch-lightning
 timm
+nltk
 git+https://github.com/baudm/parseq.git
