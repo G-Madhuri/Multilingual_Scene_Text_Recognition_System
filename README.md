@@ -13,6 +13,7 @@ Website link: https://huggingface.co/spaces/G-Madhuri/Multilingual_Scene_Text_Re
 | Oriya | 52.0% | 19.2% | 48.0% | 893 |
 
 ## 📁 Datasets
+https://ilocr.iiit.ac.in/dataset/
 
 ### Synthetic Data (Pre-training)
 - **IIIT-Synthetic-IndicSTR-Telugu**: 1.5M train / 0.5M val / 0.5M test
