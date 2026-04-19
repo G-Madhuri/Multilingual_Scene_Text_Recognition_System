@@ -22,7 +22,6 @@ if os.path.exists(parseq_path):
 try:
     from strhub.models.parseq.model import PARSeq
     from strhub.data.utils import Tokenizer
-    from strhub.models.utils import create_model
     logger.info("Successfully imported PARSeq modules")
 except ImportError as e:
     logger.error(f"Failed to import PARSeq: {e}")
@@ -131,24 +130,44 @@ def load_model(model_path, lang_name):
                 k = k[10:]
             new_state_dict[k] = v
         
-        # Get model parameters from state dict
-        img_size = new_state_dict.get('encoder.conv1.weight').shape[-1] if 'encoder.conv1.weight' in new_state_dict else 32
-        max_label_length = 100
+        # Create model - try different initialization methods
+        model = None
         
-        # Create model instance using create_model with config
+        # Method 1: Try to create with default parameters and then load weights
         try:
-            # Try to create model with default config
+            # Import the base model creation function
+            from strhub.models.utils import create_model
+            
+            # Try to load with a known working config
             model = create_model('parseq', pretrained=False)
             logger.info("Model created with create_model")
-        except:
-            # Fallback: create PARSeq instance directly
-            from strhub.models.parseq.model import PARSeq
-            model = PARSeq(
-                charset_size=len(charset_str),
-                img_size=(32, 128),
-                max_label_length=max_label_length
-            )
-            logger.info("Model created with direct PARSeq initialization")
+        except Exception as e1:
+            logger.warning(f"create_model failed: {e1}")
+            
+            # Method 2: Try direct PARSeq initialization with correct parameters
+            try:
+                # Check what parameters PARSeq expects
+                import inspect
+                sig = inspect.signature(PARSeq.__init__)
+                logger.info(f"PARSeq expects: {sig}")
+                
+                # Try without any parameters
+                model = PARSeq()
+                logger.info("Model created with PARSeq()")
+            except Exception as e2:
+                logger.warning(f"PARSeq() failed: {e2}")
+                
+                # Method 3: Try to load from checkpoint directly using torch.hub
+                try:
+                    # Use the hub to load the model
+                    model = torch.hub.load('baudm/parseq', 'parseq', pretrained=True, trust_repo=True)
+                    logger.info("Model loaded from torch hub")
+                except Exception as e3:
+                    logger.error(f"All loading methods failed. Last error: {e3}")
+                    return None, None, None
+        
+        if model is None:
+            return None, None, None
         
         # Load weights
         missing, unexpected = model.load_state_dict(new_state_dict, strict=False)
