@@ -34,44 +34,25 @@ except ImportError:
             raise
     except ImportError as e:
         logger.error(f"Failed to import PARSeq: {e}")
-        # Create placeholder classes
-        class Tokenizer:
-            def __init__(self, charset):
-                self.charset = charset
-                self._itos = {i: ch for i, ch in enumerate(charset)}
-                self._stoi = {ch: i for i, ch in enumerate(charset)}
-                self.pad_id = 0
-                self.bos_id = 1
-                self.eos_id = 2
-        
-        class PARSeq:
-            def __init__(self, *args, **kwargs):
-                pass
+        exit()
 
 warnings.filterwarnings('ignore')
 
 # =========================
-# Configuration - Added explicit charsets for all languages
+# Configuration
 # =========================
-TELUGU_CHARSET = "అఆఇఈఉఊఋఌఎఏఐఒఓఔకఖగఘఙచఛజఝఞటఠడఢణతథదధనపఫబభమయరఱలళవశషసహాిీుూృౄెేైొోౌ్ౢౣ"
-BENGALI_CHARSET = "অআইঈউঊঋএঐওঔকখগঘঙচছজঝঞটঠডঢণতথদধনপফবভমযরলশষসহাািীুূৃৄেৈোৌ্ৎংঃ"
-ORIYA_CHARSET = "ଅଆଇଈଉଊଋଌଏଐଓଔକଖଗଘଙଚଛଜଝଞଟଠଡଢଣତଥଦଧନପଫବଭମଯରଲଳଵଶଷସହାିିୀୁୂୃୄେୈୋୌ୍ଂଁଃ"
-
 LANGUAGES = {
     "Telugu": {
         "model_path": "parseq_telugu_finetuned_final_5epochs.pth",
         "samples_dir": "telugu_samples",
-        "charset": TELUGU_CHARSET
     },
     "Bengali": {
         "model_path": "finetuned_bengali_model.pth",
         "samples_dir": "bengali_samples",
-        "charset": BENGALI_CHARSET
     },
     "Oriya": {
         "model_path": "parseq_oriya_final_direct.pth",
         "samples_dir": "oriya_samples",
-        "charset": ORIYA_CHARSET
     }
 }
 
@@ -116,39 +97,28 @@ def load_model(model_path, lang_name):
         return None, None, None
 
     try:
-        # Load checkpoint with weights_only=False for compatibility
+        # Load checkpoint
         checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
         logger.info(f"Checkpoint loaded for {lang_name}")
 
-        # Get charset - first try from checkpoint, then from config
-        if 'charset' in checkpoint:
-            charset_str = checkpoint['charset']
-            logger.info(f"Using charset from checkpoint for {lang_name}")
-        else:
-            charset_str = LANGUAGES[lang_name].get('charset')
-            if charset_str:
-                logger.info(f"Using configured charset for {lang_name}")
-            else:
-                logger.error(f"No charset found for {lang_name}")
-                return None, None, None
+        # Get charset from checkpoint (since you saved models with charset)
+        if 'charset' not in checkpoint:
+            logger.error(f"No charset found in checkpoint for {lang_name}")
+            return None, None, None
+        
+        charset_str = checkpoint['charset']
+        logger.info(f"Charset length for {lang_name}: {len(charset_str)}")
 
         # Create tokenizer
         tokenizer = Tokenizer(charset_str)
         
-        # Create model instance - use PARSeq class directly
-        try:
-            # Try to create model with proper arguments
-            model = PARSeq(
-                charset_size=len(charset_str),
-                img_size=(32, 128),
-                max_label_length=100
-            )
-            logger.info(f"Model instance created for {lang_name}")
-        except Exception as e:
-            logger.error(f"Failed to create model instance: {e}")
-            return None, None, None
-
-        # Handle different checkpoint formats
+        # Load the pretrained model from torch hub (this works!)
+        model = torch.hub.load('baudm/parseq', 'parseq', pretrained=True, trust_repo=True)
+        
+        # Modify the tokenizer
+        model.tokenizer = tokenizer
+        
+        # Now load your fine-tuned weights
         if 'model_state_dict' in checkpoint:
             state_dict = checkpoint['model_state_dict']
         elif 'model' in checkpoint:
@@ -156,25 +126,24 @@ def load_model(model_path, lang_name):
         else:
             state_dict = checkpoint
         
-        # Remove 'module.' prefix if present and handle other key issues
+        # Clean up state dict keys
         new_state_dict = {}
         for k, v in state_dict.items():
-            # Remove 'module.' prefix
+            # Remove 'module.' prefix if present
             if k.startswith('module.'):
                 k = k[7:]
-            # Handle other common prefixes
+            # Remove '_orig_mod.' prefix if present
             if k.startswith('_orig_mod.'):
                 k = k[10:]
             new_state_dict[k] = v
         
-        # Load state dict with strict=False to handle missing/unexpected keys
-        missing_keys, unexpected_keys = model.load_state_dict(new_state_dict, strict=False)
-        if missing_keys:
-            logger.warning(f"Missing keys for {lang_name}: {missing_keys[:5]}...")
-        if unexpected_keys:
-            logger.warning(f"Unexpected keys for {lang_name}: {unexpected_keys[:5]}...")
+        # Load weights
+        missing, unexpected = model.load_state_dict(new_state_dict, strict=False)
+        if missing:
+            logger.warning(f"Missing keys: {missing[:5]}...")
+        if unexpected:
+            logger.warning(f"Unexpected keys: {unexpected[:5]}...")
         
-        model.tokenizer = tokenizer
         model = model.to(device)
         model.eval()
 
