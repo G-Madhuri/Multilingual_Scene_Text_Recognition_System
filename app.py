@@ -10,7 +10,13 @@ from PIL import Image
 import numpy as np
 
 # =========================
-# Auto-unzip parseq.zip if it exists (ONLY ADDITION)
+# Download nltk data (required by PARSeq)
+# =========================
+import nltk
+nltk.download('punkt', quiet=True)
+
+# =========================
+# Auto-unzip parseq.zip if it exists
 # =========================
 if os.path.exists('parseq.zip'):
     print("Found parseq.zip, extracting...")
@@ -34,8 +40,6 @@ if os.path.exists(parseq_path):
     sys.path.insert(0, parseq_path)
 else:
     logger.error(f"PARSeq not found at {parseq_path}")
-    # Don't exit, try to continue
-    print(f"WARNING: PARSeq folder not found at {parseq_path}")
 
 try:
     from strhub.data.utils import Tokenizer
@@ -43,7 +47,6 @@ try:
     print("✅ Successfully imported Tokenizer")
 except ImportError as e:
     print(f"Import error: {e}")
-    # Create a simple tokenizer as fallback
     class Tokenizer:
         def __init__(self, chars):
             self.charset = chars
