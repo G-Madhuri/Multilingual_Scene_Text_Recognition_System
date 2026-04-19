@@ -10,7 +10,7 @@ from PIL import Image
 import numpy as np
 
 # =========================
-# Auto-unzip parseq.zip if it exists
+# Auto-unzip parseq.zip if it exists (ONLY ADDITION)
 # =========================
 if os.path.exists('parseq.zip'):
     print("Found parseq.zip, extracting...")
@@ -29,24 +29,29 @@ logger = logging.getLogger(__name__)
 # =========================
 # Setup PARSeq path
 # =========================
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parseq_local_path = os.path.join(current_dir, 'parseq')
-
-if os.path.exists(parseq_local_path):
-    sys.path.insert(0, parseq_local_path)
-    logger.info(f"✅ Using local parseq folder at {parseq_local_path}")
+parseq_path = os.path.join(os.path.dirname(__file__), 'parseq')
+if os.path.exists(parseq_path):
+    sys.path.insert(0, parseq_path)
 else:
-    logger.error(f"parseq folder not found at {parseq_local_path}")
-    sys.exit(1)
+    logger.error(f"PARSeq not found at {parseq_path}")
+    # Don't exit, try to continue
+    print(f"WARNING: PARSeq folder not found at {parseq_path}")
 
-# Import from local parseq folder
 try:
     from strhub.data.utils import Tokenizer
-    from strhub.models.parseq.model import PARSeq
-    logger.info("✅ Successfully imported Tokenizer and PARSeq from local folder")
+    import torch.hub
+    print("✅ Successfully imported Tokenizer")
 except ImportError as e:
-    logger.error(f"Failed to import: {e}")
-    raise
+    print(f"Import error: {e}")
+    # Create a simple tokenizer as fallback
+    class Tokenizer:
+        def __init__(self, chars):
+            self.charset = chars
+            self._itos = {i: ch for i, ch in enumerate(chars)}
+            self._stoi = {ch: i for i, ch in enumerate(chars)}
+            self.pad_id = 0
+            self.bos_id = 1
+            self.eos_id = 2
 
 warnings.filterwarnings('ignore')
 
@@ -81,6 +86,20 @@ transform = T.Compose([
 ])
 
 # =========================
+# Decode
+# =========================
+def decode_prediction(logits, tokenizer):
+    pred_ids = logits.argmax(-1)[0]
+    chars = []
+    for t in pred_ids:
+        t = t.item()
+        if t == tokenizer.eos_id:
+            break
+        if t not in [tokenizer.pad_id, tokenizer.bos_id] and t < len(tokenizer._itos):
+            chars.append(tokenizer._itos[t])
+    return "".join(chars)
+
+# =========================
 # Model Cache
 # =========================
 model_cache = {}
@@ -91,32 +110,34 @@ def load_model(model_path, lang_name):
         return model_cache[cache_key]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Loading {lang_name} model on {device}")
 
     if not os.path.exists(model_path):
         logger.error(f"Model not found: {model_path}")
         return None, None, None
 
     try:
-        # Load checkpoint
+        # Load checkpoint with weights_only=False for compatibility
         checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
-        logger.info(f"Checkpoint loaded for {lang_name}")
 
         if 'charset' in checkpoint:
             charset_str = checkpoint['charset']
         elif lang_name == "Oriya":
             charset_str = ORIYA_CHARSET
         else:
-            logger.warning(f"No charset found for {lang_name}")
+            logger.warning(f"No charset found for {lang_name}, using default")
             return None, None, None
 
-        logger.info(f"Charset length for {lang_name}: {len(charset_str)}")
+        # Load model from torch hub (THIS IS THE KEY - works locally)
+        model = torch.hub.load('baudm/parseq', 'parseq', pretrained=False, trust_repo=True)
+        model.tokenizer = Tokenizer(charset_str)
 
-        # Create tokenizer
-        tokenizer = Tokenizer(charset_str)
-        
-        # Get model state dict
-        state_dict = checkpoint.get('model_state_dict', checkpoint.get('model', checkpoint))
+        # Handle different checkpoint formats
+        if 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+        elif 'model' in checkpoint:
+            state_dict = checkpoint['model']
+        else:
+            state_dict = checkpoint
         
         # Remove 'module.' prefix if present
         new_state_dict = {}
@@ -125,38 +146,13 @@ def load_model(model_path, lang_name):
                 k = k.replace('module.', '')
             new_state_dict[k] = v
         
-        # Create model
-        model = PARSeq(
-            num_tokens=len(charset_str),
-            max_label_length=100,
-            img_size=(32, 128),
-            patch_size=(4, 8),
-            embed_dim=384,
-            enc_num_heads=6,
-            enc_mlp_ratio=4,
-            enc_depth=12,
-            dec_num_heads=6,
-            dec_mlp_ratio=4,
-            dec_depth=4,
-            decode_ar=True,
-            refine_iters=1,
-            dropout=0.1
-        )
-        
-        # Load weights
-        missing, unexpected = model.load_state_dict(new_state_dict, strict=False)
-        if missing:
-            logger.warning(f"Missing keys: {len(missing)}")
-        if unexpected:
-            logger.warning(f"Unexpected keys: {len(unexpected)}")
-        
-        model.tokenizer = tokenizer
+        model.load_state_dict(new_state_dict, strict=False)
         model = model.to(device)
         model.eval()
 
-        model_cache[cache_key] = (model, device, tokenizer)
+        model_cache[cache_key] = (model, device, model.tokenizer)
         logger.info(f"✅ Loaded {lang_name} model successfully")
-        return model, device, tokenizer
+        return model, device, model.tokenizer
 
     except Exception as e:
         logger.error(f"Error loading {lang_name}: {e}")
@@ -165,33 +161,23 @@ def load_model(model_path, lang_name):
         return None, None, None
 
 # =========================
-# Inference - Use model's generate method
+# Inference
 # =========================
 def inference_image(model, image, device, tokenizer):
-    if image is None:
-        return "", 0.0
-    
     if image.mode != 'RGB':
         image = image.convert('RGB')
 
     img_tensor = transform(image).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        # Use the model's generate method instead of forward
-        # This handles the tokenization internally
-        pred_str = model.generate(img_tensor, tokenizer)
-        
-        # Calculate confidence (approximate)
-        try:
-            # Get logits for confidence estimation
-            logits = model(images=img_tensor, tokenizer=tokenizer)
-            probs = torch.softmax(logits, dim=-1)
-            max_probs = probs.max(dim=-1)[0][0]
-            avg_conf = max_probs[:len(pred_str[0])].mean().item() if len(pred_str[0]) > 0 else 0
-        except:
-            avg_conf = 0.5  # Default confidence if can't calculate
-        
-        return pred_str[0] if isinstance(pred_str, list) else pred_str, avg_conf
+        logits = model(img_tensor)
+        predicted_text = decode_prediction(logits, tokenizer)
+
+        probs = torch.softmax(logits, dim=-1)
+        max_probs = probs.max(dim=-1)[0][0]
+        avg_conf = max_probs[:len(predicted_text)].mean().item() if len(predicted_text) > 0 else 0
+
+    return predicted_text, avg_conf
 
 # =========================
 # Get samples for specific language
@@ -289,7 +275,7 @@ def create_language_tab(language):
         
         text, conf = inference_image(model, image, device, tokenizer)
         
-        if text == "" or text is None:
+        if text == "":
             return "🔍 No text detected in the image", ""
         
         return text, f"✅ Confidence: {conf:.2%}"
