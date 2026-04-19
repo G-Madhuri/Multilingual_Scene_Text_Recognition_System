@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # =========================
-# Setup PARSeq path - USE LOCAL FOLDER, NOT TORCH HUB
+# Setup PARSeq path
 # =========================
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parseq_local_path = os.path.join(current_dir, 'parseq')
@@ -46,7 +46,6 @@ try:
     logger.info("✅ Successfully imported Tokenizer and PARSeq from local folder")
 except ImportError as e:
     logger.error(f"Failed to import: {e}")
-    logger.info(f"Contents of parseq folder: {os.listdir(parseq_local_path)}")
     raise
 
 warnings.filterwarnings('ignore')
@@ -80,20 +79,6 @@ transform = T.Compose([
     T.ToTensor(),
     T.Normalize(mean=[0.5], std=[0.5])
 ])
-
-# =========================
-# Decode
-# =========================
-def decode_prediction(logits, tokenizer):
-    pred_ids = logits.argmax(-1)[0]
-    chars = []
-    for t in pred_ids:
-        t = t.item()
-        if t == tokenizer.eos_id:
-            break
-        if t not in [tokenizer.pad_id, tokenizer.bos_id] and t < len(tokenizer._itos):
-            chars.append(tokenizer._itos[t])
-    return "".join(chars)
 
 # =========================
 # Model Cache
@@ -140,7 +125,7 @@ def load_model(model_path, lang_name):
                 k = k.replace('module.', '')
             new_state_dict[k] = v
         
-        # Create model with required parameters
+        # Create model
         model = PARSeq(
             num_tokens=len(charset_str),
             max_label_length=100,
@@ -159,7 +144,12 @@ def load_model(model_path, lang_name):
         )
         
         # Load weights
-        model.load_state_dict(new_state_dict, strict=False)
+        missing, unexpected = model.load_state_dict(new_state_dict, strict=False)
+        if missing:
+            logger.warning(f"Missing keys: {len(missing)}")
+        if unexpected:
+            logger.warning(f"Unexpected keys: {len(unexpected)}")
+        
         model.tokenizer = tokenizer
         model = model.to(device)
         model.eval()
@@ -175,7 +165,7 @@ def load_model(model_path, lang_name):
         return None, None, None
 
 # =========================
-# Inference - FIXED FORWARD METHOD
+# Inference - Use model's generate method
 # =========================
 def inference_image(model, image, device, tokenizer):
     if image is None:
@@ -187,21 +177,21 @@ def inference_image(model, image, device, tokenizer):
     img_tensor = transform(image).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        # Call forward with both images and tokenizer
-        logits = model(images=img_tensor, tokenizer=tokenizer)
+        # Use the model's generate method instead of forward
+        # This handles the tokenization internally
+        pred_str = model.generate(img_tensor, tokenizer)
         
-        # Get predicted text from logits
-        # For PARSeq, the output might be logits or the model might return predictions directly
-        if isinstance(logits, tuple):
-            logits = logits[0]  # Sometimes returns (logits, attention_weights)
+        # Calculate confidence (approximate)
+        try:
+            # Get logits for confidence estimation
+            logits = model(images=img_tensor, tokenizer=tokenizer)
+            probs = torch.softmax(logits, dim=-1)
+            max_probs = probs.max(dim=-1)[0][0]
+            avg_conf = max_probs[:len(pred_str[0])].mean().item() if len(pred_str[0]) > 0 else 0
+        except:
+            avg_conf = 0.5  # Default confidence if can't calculate
         
-        predicted_text = decode_prediction(logits, tokenizer)
-
-        probs = torch.softmax(logits, dim=-1)
-        max_probs = probs.max(dim=-1)[0][0]
-        avg_conf = max_probs[:len(predicted_text)].mean().item() if len(predicted_text) > 0 else 0
-
-    return predicted_text, avg_conf
+        return pred_str[0] if isinstance(pred_str, list) else pred_str, avg_conf
 
 # =========================
 # Get samples for specific language
@@ -299,7 +289,7 @@ def create_language_tab(language):
         
         text, conf = inference_image(model, image, device, tokenizer)
         
-        if text == "":
+        if text == "" or text is None:
             return "🔍 No text detected in the image", ""
         
         return text, f"✅ Confidence: {conf:.2%}"
