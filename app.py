@@ -187,17 +187,13 @@ def inference_image(model, image, device, tokenizer):
     img_tensor = transform(image).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        # Try different forward signatures
-        try:
-            # Try with 'images' parameter
-            logits = model(images=img_tensor)
-        except TypeError:
-            try:
-                # Try with 'image' parameter
-                logits = model(image=img_tensor)
-            except TypeError:
-                # Try with just the tensor
-                logits = model(img_tensor)
+        # Call forward with both images and tokenizer
+        logits = model(images=img_tensor, tokenizer=tokenizer)
+        
+        # Get predicted text from logits
+        # For PARSeq, the output might be logits or the model might return predictions directly
+        if isinstance(logits, tuple):
+            logits = logits[0]  # Sometimes returns (logits, attention_weights)
         
         predicted_text = decode_prediction(logits, tokenizer)
 
