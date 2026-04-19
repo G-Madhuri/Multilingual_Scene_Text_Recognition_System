@@ -27,28 +27,27 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # =========================
-# Setup PARSeq path
+# Setup PARSeq path - USE LOCAL FOLDER, NOT TORCH HUB
 # =========================
-# Add current directory to path
 current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
+parseq_local_path = os.path.join(current_dir, 'parseq')
 
-# Try to import from parseq folder
+if os.path.exists(parseq_local_path):
+    sys.path.insert(0, parseq_local_path)
+    logger.info(f"✅ Using local parseq folder at {parseq_local_path}")
+else:
+    logger.error(f"parseq folder not found at {parseq_local_path}")
+    sys.exit(1)
+
+# Import from local parseq folder
 try:
     from strhub.data.utils import Tokenizer
-    logger.info("✅ Successfully imported Tokenizer from parseq folder")
+    from strhub.models.parseq.model import PARSeq
+    logger.info("✅ Successfully imported Tokenizer and PARSeq from local folder")
 except ImportError as e:
-    logger.error(f"Failed to import Tokenizer: {e}")
-    # List what's in current directory for debugging
-    logger.info(f"Files in {current_dir}: {os.listdir(current_dir)}")
-    # Check if parseq folder exists
-    if os.path.exists('parseq'):
-        logger.info("parseq folder exists, checking contents:")
-        logger.info(f"parseq contents: {os.listdir('parseq')}")
+    logger.error(f"Failed to import: {e}")
+    logger.info(f"Contents of parseq folder: {os.listdir(parseq_local_path)}")
     raise
-
-import torch.hub
 
 warnings.filterwarnings('ignore')
 
@@ -128,17 +127,15 @@ def load_model(model_path, lang_name):
 
         logger.info(f"Charset length for {lang_name}: {len(charset_str)}")
 
-        # Load model from torch hub
-        model = torch.hub.load('baudm/parseq', 'parseq', pretrained=False, trust_repo=True)
-        model.tokenizer = Tokenizer(charset_str)
-
-        # Handle different checkpoint formats
-        if 'model_state_dict' in checkpoint:
-            state_dict = checkpoint['model_state_dict']
-        elif 'model' in checkpoint:
-            state_dict = checkpoint['model']
-        else:
-            state_dict = checkpoint
+        # Create tokenizer
+        tokenizer = Tokenizer(charset_str)
+        
+        # Create model instance from local PARSeq class
+        # Get model parameters from state dict keys
+        state_dict = checkpoint.get('model_state_dict', checkpoint.get('model', checkpoint))
+        
+        # Create model with default parameters (it will be overwritten by state_dict)
+        model = PARSeq()
         
         # Remove 'module.' prefix if present
         new_state_dict = {}
@@ -147,13 +144,15 @@ def load_model(model_path, lang_name):
                 k = k.replace('module.', '')
             new_state_dict[k] = v
         
+        # Load weights
         model.load_state_dict(new_state_dict, strict=False)
+        model.tokenizer = tokenizer
         model = model.to(device)
         model.eval()
 
-        model_cache[cache_key] = (model, device, model.tokenizer)
+        model_cache[cache_key] = (model, device, tokenizer)
         logger.info(f"✅ Loaded {lang_name} model successfully")
-        return model, device, model.tokenizer
+        return model, device, tokenizer
 
     except Exception as e:
         logger.error(f"Error loading {lang_name}: {e}")
@@ -301,7 +300,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
         margin: auto !important;
     }
     
-    /* Make tab text clearly visible */
     .tab-nav button {
         font-size: 18px !important;
         font-weight: bold !important;
@@ -324,7 +322,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
         transform: translateY(-2px);
     }
     
-    /* Button styling */
     button {
         transition: all 0.3s ease !important;
         font-weight: bold !important;
@@ -338,7 +335,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
         box-shadow: 0 5px 15px rgba(0,0,0,0.2) !important;
     }
     
-    /* Gallery styling - prevent expansion */
     .gr-gallery {
         border: 2px solid #e0e0e0;
         border-radius: 10px;
@@ -355,13 +351,11 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
         transform: scale(1.05) !important;
     }
     
-    /* Box styling */
     .gr-box {
         border-radius: 10px;
         border: 1px solid #e0e0e0;
     }
     
-    /* Primary button styling */
     .gr-button-primary {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
         color: white !important;
@@ -369,7 +363,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
     }
 """) as demo:
     
-    # Header
     gr.Markdown("""
     # 📖 Multilingual Scene Text Recognition System
     ### Extract text from images in Telugu, Bengali, and Oriya languages
@@ -383,7 +376,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
             with gr.TabItem(f"🔤 {lang}"):
                 create_language_tab(lang)
     
-    # Footer
     gr.Markdown("""
     ---
     ### 💡 How to use:
@@ -391,24 +383,17 @@ with gr.Blocks(theme=gr.themes.Soft(), title="Multilingual Scene Text Recognitio
     2. **Click any sample thumbnail** - it will load into the main preview above
     3. **Click "Extract Text"** button below the preview
     4. **View results** on the right side
-    
-    ### 📌 Note:
-    - Sample thumbnails stay as thumbnails - they don't expand when clicked
-    - Only the main preview area changes when you click a sample
-    - You can also upload your own images
     """)
 
 # =========================
 # Run
 # =========================
 if __name__ == "__main__":
-    # Check directories
     for lang, config in LANGUAGES.items():
         if not os.path.exists(config["model_path"]):
             logger.warning(f"⚠️ Model not found: {config['model_path']} for {lang}")
         if not os.path.exists(config["samples_dir"]):
             os.makedirs(config["samples_dir"], exist_ok=True)
-            logger.warning(f"📁 Created samples directory: {config['samples_dir']}")
     
     demo.launch(
         server_name="0.0.0.0",
