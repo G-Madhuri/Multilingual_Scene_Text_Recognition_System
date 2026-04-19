@@ -2,6 +2,7 @@
 # Multilingual Scene Text Recognition
 
 A production-ready system for recognizing scene text in **Telugu**, **Bengali**, and **Oriya** languages using PARSeq architecture.
+Website link: https://huggingface.co/spaces/G-Madhuri/Multilingual_Scene_Text_Recognition_System
 
 ## 📊 Model Performance
 
