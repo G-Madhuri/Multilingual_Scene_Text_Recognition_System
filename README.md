@@ -45,11 +45,11 @@ Then open http://localhost:7860
 
 Download trained models and place in project root:
 
-| Language | Model File            |
-| -------- | --------------------- |
-| Telugu   | parseq_telugu.pth     |
-| Bengali  | finetuned_bengali.pth |
-| Oriya    | parseq_oriya.pth      |
+| Language |        Model File                             |
+| -------- | --------------------------------------------- |
+| Telugu   | parseq_telugu_finetuned_final_5epochs.pth     |
+| Bengali  | finetuned_bengali_model.pth                   |
+| Oriya    | parseq_oriya_final_direct.pth                 |
 
 ## 🖥️ System Requirements
 
