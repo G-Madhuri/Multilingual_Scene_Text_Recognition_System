@@ -13,29 +13,40 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # =========================
-# Setup PARSeq path
+# Import PARSeq modules directly
 # =========================
-parseq_path = os.path.join(os.path.dirname(__file__), 'parseq')
-if os.path.exists(parseq_path):
-    sys.path.insert(0, parseq_path)
-else:
-    logger.warning(f"PARSeq folder not found at {parseq_path}, trying direct import")
-
 try:
+    # Try to import from installed parseq package
+    from strhub.models.parseq.model import PARSeq
     from strhub.data.utils import Tokenizer
+    logger.info("Successfully imported PARSeq from package")
 except ImportError:
-    logger.error("Failed to import Tokenizer. Make sure PARSeq is installed.")
-    # Create a basic tokenizer if PARSeq is not available
-    class Tokenizer:
-        def __init__(self, charset):
-            self.charset = charset
-            self._itos = {i: ch for i, ch in enumerate(charset)}
-            self._stoi = {ch: i for i, ch in enumerate(charset)}
-            self.pad_id = 0
-            self.bos_id = 1
-            self.eos_id = 2
-
-import torch.hub
+    try:
+        # Try local path
+        parseq_path = os.path.join(os.path.dirname(__file__), 'parseq')
+        if os.path.exists(parseq_path):
+            sys.path.insert(0, parseq_path)
+            from strhub.models.parseq.model import PARSeq
+            from strhub.data.utils import Tokenizer
+            logger.info("Successfully imported PARSeq from local path")
+        else:
+            logger.error("PARSeq not found")
+            raise
+    except ImportError as e:
+        logger.error(f"Failed to import PARSeq: {e}")
+        # Create placeholder classes
+        class Tokenizer:
+            def __init__(self, charset):
+                self.charset = charset
+                self._itos = {i: ch for i, ch in enumerate(charset)}
+                self._stoi = {ch: i for i, ch in enumerate(charset)}
+                self.pad_id = 0
+                self.bos_id = 1
+                self.eos_id = 2
+        
+        class PARSeq:
+            def __init__(self, *args, **kwargs):
+                pass
 
 warnings.filterwarnings('ignore')
 
@@ -121,17 +132,21 @@ def load_model(model_path, lang_name):
                 logger.error(f"No charset found for {lang_name}")
                 return None, None, None
 
-        # Load model architecture
-        try:
-            model = torch.hub.load('baudm/parseq', 'parseq', pretrained=False, trust_repo=True)
-            logger.info(f"Model architecture loaded for {lang_name}")
-        except Exception as e:
-            logger.error(f"Failed to load model architecture: {e}")
-            return None, None, None
-        
-        # Create tokenizer and attach to model
+        # Create tokenizer
         tokenizer = Tokenizer(charset_str)
-        model.tokenizer = tokenizer
+        
+        # Create model instance - use PARSeq class directly
+        try:
+            # Try to create model with proper arguments
+            model = PARSeq(
+                charset_size=len(charset_str),
+                img_size=(32, 128),
+                max_label_length=100
+            )
+            logger.info(f"Model instance created for {lang_name}")
+        except Exception as e:
+            logger.error(f"Failed to create model instance: {e}")
+            return None, None, None
 
         # Handle different checkpoint formats
         if 'model_state_dict' in checkpoint:
@@ -159,6 +174,7 @@ def load_model(model_path, lang_name):
         if unexpected_keys:
             logger.warning(f"Unexpected keys for {lang_name}: {unexpected_keys[:5]}...")
         
+        model.tokenizer = tokenizer
         model = model.to(device)
         model.eval()
 
