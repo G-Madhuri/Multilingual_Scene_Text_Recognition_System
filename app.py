@@ -130,12 +130,8 @@ def load_model(model_path, lang_name):
         # Create tokenizer
         tokenizer = Tokenizer(charset_str)
         
-        # Create model instance from local PARSeq class
-        # Get model parameters from state dict keys
+        # Get model state dict
         state_dict = checkpoint.get('model_state_dict', checkpoint.get('model', checkpoint))
-        
-        # Create model with default parameters (it will be overwritten by state_dict)
-        model = PARSeq()
         
         # Remove 'module.' prefix if present
         new_state_dict = {}
@@ -143,6 +139,25 @@ def load_model(model_path, lang_name):
             if 'module.' in k:
                 k = k.replace('module.', '')
             new_state_dict[k] = v
+        
+        # Create model with required parameters
+        # Default PARSeq parameters (standard configuration)
+        model = PARSeq(
+            num_tokens=len(charset_str),  # Size of vocabulary
+            max_label_length=100,          # Maximum label length
+            img_size=(32, 128),            # Image size (height, width)
+            patch_size=(4, 8),             # Patch size
+            embed_dim=384,                 # Embedding dimension
+            enc_num_heads=6,               # Encoder number of heads
+            enc_mlp_ratio=4,               # Encoder MLP ratio
+            enc_depth=12,                  # Encoder depth
+            dec_num_heads=6,               # Decoder number of heads
+            dec_mlp_ratio=4,               # Decoder MLP ratio
+            dec_depth=4,                   # Decoder depth
+            decode_ar=True,                # Autoregressive decoding
+            refine_iters=1,                # Refinement iterations
+            dropout=0.1                    # Dropout rate
+        )
         
         # Load weights
         model.load_state_dict(new_state_dict, strict=False)
