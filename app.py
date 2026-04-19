@@ -141,22 +141,21 @@ def load_model(model_path, lang_name):
             new_state_dict[k] = v
         
         # Create model with required parameters
-        # Default PARSeq parameters (standard configuration)
         model = PARSeq(
-            num_tokens=len(charset_str),  # Size of vocabulary
-            max_label_length=100,          # Maximum label length
-            img_size=(32, 128),            # Image size (height, width)
-            patch_size=(4, 8),             # Patch size
-            embed_dim=384,                 # Embedding dimension
-            enc_num_heads=6,               # Encoder number of heads
-            enc_mlp_ratio=4,               # Encoder MLP ratio
-            enc_depth=12,                  # Encoder depth
-            dec_num_heads=6,               # Decoder number of heads
-            dec_mlp_ratio=4,               # Decoder MLP ratio
-            dec_depth=4,                   # Decoder depth
-            decode_ar=True,                # Autoregressive decoding
-            refine_iters=1,                # Refinement iterations
-            dropout=0.1                    # Dropout rate
+            num_tokens=len(charset_str),
+            max_label_length=100,
+            img_size=(32, 128),
+            patch_size=(4, 8),
+            embed_dim=384,
+            enc_num_heads=6,
+            enc_mlp_ratio=4,
+            enc_depth=12,
+            dec_num_heads=6,
+            dec_mlp_ratio=4,
+            dec_depth=4,
+            decode_ar=True,
+            refine_iters=1,
+            dropout=0.1
         )
         
         # Load weights
@@ -176,7 +175,7 @@ def load_model(model_path, lang_name):
         return None, None, None
 
 # =========================
-# Inference
+# Inference - FIXED FORWARD METHOD
 # =========================
 def inference_image(model, image, device, tokenizer):
     if image is None:
@@ -188,7 +187,18 @@ def inference_image(model, image, device, tokenizer):
     img_tensor = transform(image).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        logits = model(img_tensor)
+        # Try different forward signatures
+        try:
+            # Try with 'images' parameter
+            logits = model(images=img_tensor)
+        except TypeError:
+            try:
+                # Try with 'image' parameter
+                logits = model(image=img_tensor)
+            except TypeError:
+                # Try with just the tensor
+                logits = model(img_tensor)
+        
         predicted_text = decode_prediction(logits, tokenizer)
 
         probs = torch.softmax(logits, dim=-1)
