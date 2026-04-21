@@ -5,6 +5,10 @@ A production-ready system for recognizing scene text in **Telugu**, **Bengali**,
 
 Website link: https://huggingface.co/spaces/G-Madhuri/Multilingual_Scene_Text_Recognition_System
 
+Presentation Link: 
+
+Demo video: 
+
 ## 📊 Model Performance
 
 | Language | Exact Match | CER | WER | Test Samples |
