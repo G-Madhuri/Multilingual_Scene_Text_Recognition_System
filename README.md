@@ -5,7 +5,7 @@ A production-ready system for recognizing scene text in **Telugu**, **Bengali**,
 
 Website link: https://huggingface.co/spaces/G-Madhuri/Multilingual_Scene_Text_Recognition_System
 
-Presentation Link: https://drive.google.com/file/d/1EPCKPOFBl4VSLGGoxy4Hdw42JyjbDCg3/view?usp=sharing
+Presentation Link: https://drive.google.com/file/d/1XlZlobnU3rVgogE6DQ8r-lnzLLfOS-qa/view?usp=sharing
 
 Demo video: https://drive.google.com/file/d/1wJTjXTbWBkYZzoAa3X4Eg_39WmTEN2oO/view?usp=sharing
 
@@ -80,7 +80,18 @@ Download trained models and place in project root:
 
 MIT License
 
+## Contributors
+Yashaswi Darga
+Doddeni Sreeja
+Madhuri Gottumukkala
+
+
 ## 🙏 Acknowledgments
 
 * PARSeq authors for the architecture
 * IIIT Hyderabad for IndicSTR datasets
+
+## Subject Instructor/Guide
+Mr Panigrahi Srikanth
+Assistant Professor
+Chaitanya Bharathi Institute of Technology
