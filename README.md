@@ -76,9 +76,6 @@ Download trained models and place in project root:
 * Gradio web interface
 * Sample images gallery
 
-## 📄 License
-
-MIT License
 
 ## Contributors
 Yashaswi Darga
